@@ -145,6 +145,17 @@ def query_pdf_content(uuid: uuid_pkg.UUID, query: str = Query(..., min_length=1)
         "llm_response": llm_response
     }
 
+@router.delete("/data/clear-all")
+def clear_all_pdf_data():
+    count = len(data_store)
+    data_store.clear()
+
+    return {
+        "message": "All sessions cleared successfully.",
+        "deleted_sessions": count
+    }
+
+
 
 @router.delete("/data/{uuid}", status_code=200)
 def delete_pdf_data(uuid: uuid_pkg.UUID):
@@ -169,3 +180,4 @@ def list_all_uuids():
     Returns a list of all UUIDs currently stored.
     """
     return {"uuids": list(data_store.keys())}
+
