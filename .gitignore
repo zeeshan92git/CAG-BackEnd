@@ -1,0 +1,44 @@
+# === Secret / Environment Variables ===
+.env
+.env.*
+!.env.example
+secrets.json
+
+# === Python Virtual Environments ===
+.venv/
+venv/
+ENV/
+.env/
+Active.ps1
+
+# === Python Caches & Build Files ===
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# === Conda Environment Exports (Optional Backup) ===
+# Uncomment if you want to ignore auto-generated yml files
+# *.yml
+
+# === Node / JavaScript (If using package.json) ===
+node_modules/
+/dist
+.npm
+
+# === IDE & Editor Specific Files ===
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# === System Files ===
+.DS_Store
+Thumbs.db
