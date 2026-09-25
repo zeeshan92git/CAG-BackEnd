@@ -1,183 +1,363 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    Query,
+)
+
 import uuid as uuid_pkg
 import os
 
-# Import the shared data store
+
 from src.data_store import data_store
-
-# PDF processing utility
 from src.utils.pdf_processor import extract_text_from_pdf
-
-# LLM Client utility
 from src.utils.llm_client import get_llm_response
+
 
 router = APIRouter()
 
-# Define temp directory for uploads
+
 UPLOAD_DIR = "/tmp/cag_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@router.post("/upload/{uuid}", status_code=201)
-def create_pdf_entry(uuid: uuid_pkg.UUID, file: UploadFile = File(...)):
+os.makedirs(
+    UPLOAD_DIR,
+    exist_ok=True,
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# PDF VALIDATION
+# ─────────────────────────────────────────────────────────────
+
+def read_and_validate_pdf(
+    file: UploadFile
+) -> tuple[str, bytes]:
     """
-    Uploads PDF file with a specific UUID.
-    Extracts data and stores in data store.
-    If UUID already exists, raises an error.
+    Validate that uploaded content is actually a PDF.
+
+    Returns:
+        safe filename
+        file bytes
     """
 
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid file type. Only PDF files allowed."
-        )
+    filename = os.path.basename(
+        file.filename or ""
+    )
 
-    uuid_str = str(uuid)
-    if uuid_str in data_store:
+
+    # Extension validation
+    if not filename.lower().endswith(".pdf"):
+
         raise HTTPException(
             status_code=400,
-            detail=f"UUID {uuid_str} already exists. Use PUT /api/v1/upload/{uuid_str} to append data."
+            detail="Only .pdf files are allowed."
         )
-    
-    file_path = os.path.join(UPLOAD_DIR, f"{uuid_str}_{file.filename}")
+
+
+    file_bytes = file.file.read()
+
+
+    if not file_bytes:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded PDF is empty."
+        )
+
+
+    # Actual PDF file signature validation
+    if b"%PDF-" not in file_bytes[:1024]:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid PDF file. "
+                "The uploaded file does not contain "
+                "a valid PDF signature."
+            )
+        )
+
+
+    return filename, file_bytes
+
+
+# ─────────────────────────────────────────────────────────────
+# CREATE FIRST DOCUMENT
+# ─────────────────────────────────────────────────────────────
+
+@router.post(
+    "/upload/{uuid}",
+    status_code=201
+)
+def create_pdf_entry(
+    uuid: uuid_pkg.UUID,
+    file: UploadFile = File(...)
+):
+    """
+    Create new hidden document context.
+    """
+
+    uuid_str = str(uuid)
+
+
+    if uuid_str in data_store:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"UUID {uuid_str} already exists."
+            )
+        )
+
+
+    filename, file_bytes = read_and_validate_pdf(
+        file
+    )
+
+
+    file_path = os.path.join(
+        UPLOAD_DIR,
+        f"{uuid_str}_{filename}"
+    )
+
+
     try:
-        # Save the uploaded file temporarily
+
+        # Save temporarily
         with open(file_path, "wb") as buffer:
-            buffer.write(file.file.read())
+            buffer.write(file_bytes)
 
-        extracted_text = extract_text_from_pdf(file_path)
 
-        if extracted_text is None:
+        extracted_text = extract_text_from_pdf(
+            file_path
+        )
+
+
+        if not extracted_text:
+
             raise HTTPException(
-                status_code=500, 
-                detail="Failed to extract text from PDF"
+                status_code=400,
+                detail=(
+                    "No readable text could be extracted "
+                    "from this PDF."
+                )
             )
 
+
+        # Store only extracted text.
         data_store[uuid_str] = extracted_text
+
+
         return {
-            "message": "File uploaded and text extracted successfully.",
-            "uuid": uuid_str
+            "message": (
+                "File uploaded and text extracted successfully."
+            ),
+            "uuid": uuid_str,
         }
+
+
+    except HTTPException:
+        raise
+
+
     except Exception as e:
-        # Log the exception
+
         raise HTTPException(
             status_code=500,
-            detail=f"An error occurred during file processing: {str(e)}"
+            detail=(
+                "An error occurred during PDF processing: "
+                f"{str(e)}"
+            )
         )
+
+
     finally:
-        # Clean up the temporary file
+
         if os.path.exists(file_path):
             os.remove(file_path)
-        
+
+
+# ─────────────────────────────────────────────────────────────
+# APPEND ANOTHER DOCUMENT
+# ─────────────────────────────────────────────────────────────
 
 @router.put("/upload/{uuid}")
-def append_pdf_data(uuid: uuid_pkg.UUID, file: UploadFile = File(...)):
+def append_pdf_data(
+    uuid: uuid_pkg.UUID,
+    file: UploadFile = File(...)
+):
     """
-    Appends new PDF content to an existing UUID.
-    If UUID doesn't exist, raises an error.
+    Append another PDF's text to existing context.
     """
 
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid file type. Only PDF files allowed."
-        )
-    
     uuid_str = str(uuid)
+
+
     if uuid_str not in data_store:
+
         raise HTTPException(
             status_code=400,
-            detail=f"UUID {uuid_str} doesn't exist. Use POST /api/v1/upload/{uuid_str} to create it first."
+            detail="Current document context no longer exists."
         )
-    
-    file_path = os.path.join(UPLOAD_DIR, f"{uuid_str}_{file.filename}")
+
+
+    filename, file_bytes = read_and_validate_pdf(
+        file
+    )
+
+
+    file_path = os.path.join(
+        UPLOAD_DIR,
+        f"{uuid_str}_{filename}"
+    )
+
+
     try:
-        # Save the uploaded file temporarily
+
         with open(file_path, "wb") as buffer:
-            buffer.write(file.file.read())
+            buffer.write(file_bytes)
 
-        new_text = extract_text_from_pdf(file_path)
 
-        if new_text is None:
+        new_text = extract_text_from_pdf(
+            file_path
+        )
+
+
+        if not new_text:
+
             raise HTTPException(
-                status_code=500, 
-                detail="Failed to extract text from PDF"
+                status_code=400,
+                detail=(
+                    "No readable text could be extracted "
+                    "from this PDF."
+                )
             )
-        
-        # Append new text with proper separator
-        data_store[uuid_str] += "\n\n" + new_text
+
+
+        # This is your existing CAG append behaviour:
+        #
+        # doc1 text
+        # +
+        # doc2 text
+
+        data_store[uuid_str] += (
+            "\n\n" + new_text
+        )
+
+
         return {
-            "message": "Data appended successfully.",
-            "uuid": uuid_str
+            "message": "PDF added successfully.",
+            "uuid": uuid_str,
         }
+
+
+    except HTTPException:
+        raise
+
+
     except Exception as e:
-        # Log the exception
+
         raise HTTPException(
             status_code=500,
-            detail=f"An error occurred during file processing: {str(e)}"
+            detail=(
+                "An error occurred during PDF processing: "
+                f"{str(e)}"
+            )
         )
+
+
     finally:
-        # Clean up the temporary file
+
         if os.path.exists(file_path):
             os.remove(file_path)
 
 
+# ─────────────────────────────────────────────────────────────
+# QUERY CURRENT DOCUMENT CONTEXT
+# ─────────────────────────────────────────────────────────────
+
 @router.post("/query/{uuid}")
-def query_pdf_content(uuid: uuid_pkg.UUID, query: str = Query(..., min_length=1)):
+def query_pdf_content(
+    uuid: uuid_pkg.UUID,
+    query: str = Query(
+        ...,
+        min_length=1
+    )
+):
     """
-    Retrieves stored text for a specific UUID and sends it along with the query
-    to the LLM, returning the LLM's response.
+    Query the current hidden document context.
     """
 
     uuid_str = str(uuid)
+
+
     if uuid_str not in data_store:
+
         raise HTTPException(
             status_code=400,
-            detail=f"UUID {uuid_str} doesn't exist."
+            detail=(
+                "Document context no longer exists. "
+                "Please upload the PDF again."
+            )
         )
-    
+
+
     stored_text = data_store[uuid_str]
 
-    llm_response = get_llm_response(context=stored_text, query=query)
+
+    try:
+
+        llm_response = get_llm_response(
+            context=stored_text,
+            query=query,
+        )
+
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"LLM request failed: {str(e)}"
+        )
+
 
     return {
-        "uuid": uuid_str, 
-        "query": query, 
-        "llm_response": llm_response
-    }
-
-@router.delete("/data/clear-all")
-def clear_all_pdf_data():
-    count = len(data_store)
-    data_store.clear()
-
-    return {
-        "message": "All sessions cleared successfully.",
-        "deleted_sessions": count
+        "uuid": uuid_str,
+        "query": query,
+        "llm_response": llm_response,
     }
 
 
+# ─────────────────────────────────────────────────────────────
+# DELETE CURRENT DOCUMENT CONTEXT
+# ─────────────────────────────────────────────────────────────
 
-@router.delete("/data/{uuid}", status_code=200)
-def delete_pdf_data(uuid: uuid_pkg.UUID):
+@router.delete(
+    "/data/{uuid}",
+    status_code=200
+)
+def delete_pdf_data(
+    uuid: uuid_pkg.UUID
+):
     """
-    Delete data associated with a specific UUID from data_store.
+    Delete current hidden document context.
     """
 
     uuid_str = str(uuid)
+
+
     if uuid_str not in data_store:
+
         raise HTTPException(
             status_code=400,
-            detail=f"UUID {uuid_str} doesn't exist."
+            detail="Document context does not exist."
         )
-    
+
+
     del data_store[uuid_str]
-    return {"message": f"Data for UUID {uuid_str} deleted successfully"}
 
 
-@router.get("/list/uuids")
-def list_all_uuids():
-    """
-    Returns a list of all UUIDs currently stored.
-    """
-    return {"uuids": list(data_store.keys())}
-
+    return {
+        "message": "Document context cleared successfully."
+    }

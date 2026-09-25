@@ -53,11 +53,6 @@ def read_root():
                 <strong>DELETE /api/v1/data/{uuid}</strong><br>
                 Delete stored data for a specific UUID.
             </div>
-            <div class="endpoint">
-                <strong>GET /api/v1/list/uuids</strong><br>
-                List all stored UUIDs.
-            </div>
-            
             <h2>Getting Started:</h2>
             <p>Visit <a href="/docs">/docs</a> for interactive API documentation (Swagger UI).</p>
             <p>Or visit <a href="/redoc">/redoc</a> for ReDoc documentation.</p>
